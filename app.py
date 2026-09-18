@@ -800,7 +800,11 @@ def render_live_dashboard(db_path: Path):
         trend_html = "暂无昨日基准可比"
 
     meter_count = project_info.get("meter_count", 24)
-    online_count = len(samples_df[samples_df["online_status_desc"] == "在线"]) if not samples_df.empty else meter_count
+    if not samples_df.empty:
+        latest_meter_samples = samples_df.sort_values("datetime").groupby("meter_no", as_index=False).last()
+        online_count = int((latest_meter_samples["online_status_desc"] == "在线").sum())
+    else:
+        online_count = meter_count
     alarm_count = len(alarms_df[alarms_df["alarm_status"] == "告警中"]) if not alarms_df.empty else 0
 
     # KPI 卡片阵列 (5联)
