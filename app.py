@@ -553,37 +553,44 @@ def plot_realtime_load_curve(
     samples_df: pd.DataFrame,
     mode: str,
     selected_meters: Optional[List[str]] = None,
-    selected_category: Optional[str] = None
+    selected_category: Optional[str] = None,
+    period_label: str = ""
 ) -> go.Figure:
     """绘制电表 15 分钟实时负荷功率曲线 (kW)。"""
     fig = go.Figure()
 
     if samples_df.empty:
-        fig.add_annotation(text="暂无实时采样负荷数据", showarrow=False, font={"size": 14, "color": "#7d968b"})
+        fig.add_annotation(text="所选周期内暂无 15 分钟负荷采样数据", showarrow=False, font={"size": 14, "color": "#7d968b"})
         fig.update_layout(height=360, paper_bgcolor="white", plot_bgcolor="white")
         return fig
+
+    tag_suffix = f" · {period_label}" if period_label else ""
 
     # 1. 模式：全园区实时总负荷走势
     if mode == "total":
         total_p = samples_df.groupby("sample_time", as_index=False)["power_kw"].sum().sort_values("sample_time")
         if total_p.empty or (total_p["power_kw"] == 0).all():
-            # 只有1个时间点，展示当前总底数增量
             fig.add_annotation(text="正在累积时序负荷采样（当前已记录最新点位工况，下次采样将自动成线）", showarrow=False, font={"size": 13, "color": "#0d8250"})
+
+        # 根据采样点数决定是否绘制标记点（多天海量点时仅用平滑折线，保持高质感）
+        use_markers = len(total_p) <= 96
+        scatter_mode = "lines+markers" if use_markers else "lines"
+
         fig.add_trace(
             go.Scatter(
                 x=total_p["sample_time"],
                 y=total_p["power_kw"],
-                mode="lines+markers",
+                mode=scatter_mode,
                 name="园区总负荷",
-                line={"color": "#0f766e", "width": 3.5, "shape": "spline"},
-                marker={"size": 8, "color": "#0f766e"},
+                line={"color": "#0f766e", "width": 2.5, "shape": "spline"},
+                marker={"size": 6, "color": "#0f766e"} if use_markers else {},
                 fill="tozeroy",
                 fillcolor="rgba(15, 118, 110, 0.08)",
                 hovertemplate="<b>%{x}</b><br>全园总负荷: <b>%{y:,.2f} kW</b><extra></extra>",
             )
         )
         fig.update_layout(
-            title={"text": "全园区 24 块智能电表聚合实时负荷走势 (kW)", "font": {"size": 15, "color": "#0f766e"}},
+            title={"text": f"全园区 24 块智能电表聚合负荷走势 (kW){tag_suffix}", "font": {"size": 15, "color": "#0f766e"}},
         )
 
     # 2. 模式：单表深度下钻
@@ -593,21 +600,24 @@ def plot_realtime_load_curve(
         label = sub["room_detail_addr"].iloc[0] if not sub.empty else m_no
         mult = sub["multiplier"].iloc[0] if not sub.empty else 1.0
 
+        use_markers = len(sub) <= 96
+        scatter_mode = "lines+markers" if use_markers else "lines"
+
         fig.add_trace(
             go.Scatter(
                 x=sub["sample_time"],
                 y=sub["power_kw"],
-                mode="lines+markers",
+                mode=scatter_mode,
                 name=label,
-                line={"color": "#2563eb", "width": 3, "shape": "spline"},
-                marker={"size": 8, "color": "#2563eb"},
+                line={"color": "#2563eb", "width": 2.5, "shape": "spline"},
+                marker={"size": 6, "color": "#2563eb"} if use_markers else {},
                 fill="tozeroy",
                 fillcolor="rgba(37, 99, 235, 0.08)",
-                hovertemplate="<b>%{x}</b><br>" + label + "<br>实时负荷功率: <b>%{y:,.2f} kW</b><extra></extra>",
+                hovertemplate="<b>%{x}</b><br>" + label + "<br>负荷功率: <b>%{y:,.2f} kW</b><extra></extra>",
             )
         )
         fig.update_layout(
-            title={"text": f"回路负荷曲线: {label} (表号: {m_no} · 倍率: {mult:.0f}x)", "font": {"size": 15, "color": "#1e40af"}},
+            title={"text": f"回路负荷曲线: {label} (表号: {m_no} · 倍率: {mult:.0f}x){tag_suffix}", "font": {"size": 15, "color": "#1e40af"}},
         )
 
     # 3. 模式：多回路同轴对比
@@ -617,19 +627,22 @@ def plot_realtime_load_curve(
             sub = samples_df[samples_df["meter_no"] == m_no].sort_values("sample_time")
             label = sub["room_detail_addr"].iloc[0] if not sub.empty else m_no
             c = colors[idx % len(colors)]
+            use_markers = len(sub) <= 96
+            scatter_mode = "lines+markers" if use_markers else "lines"
+
             fig.add_trace(
                 go.Scatter(
                     x=sub["sample_time"],
                     y=sub["power_kw"],
-                    mode="lines+markers",
+                    mode=scatter_mode,
                     name=label,
-                    line={"color": c, "width": 2.5},
-                    marker={"size": 6, "color": c},
+                    line={"color": c, "width": 2.0},
+                    marker={"size": 5, "color": c} if use_markers else {},
                     hovertemplate="<b>%{x}</b><br>" + label + ": <b>%{y:,.2f} kW</b><extra></extra>",
                 )
             )
         fig.update_layout(
-            title={"text": f"多回路实时负荷功率比对 (已选 {len(selected_meters)} 个回路)", "font": {"size": 15, "color": "#163d30"}},
+            title={"text": f"多回路实时负荷功率比对 (已选 {len(selected_meters)} 个回路){tag_suffix}", "font": {"size": 15, "color": "#163d30"}},
             showlegend=True,
             legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
         )
@@ -638,21 +651,24 @@ def plot_realtime_load_curve(
     elif mode == "category" and selected_category:
         cat_df = samples_df[samples_df["category"] == selected_category]
         cat_p = cat_df.groupby("sample_time", as_index=False)["power_kw"].sum().sort_values("sample_time")
+        use_markers = len(cat_p) <= 96
+        scatter_mode = "lines+markers" if use_markers else "lines"
+
         fig.add_trace(
             go.Scatter(
                 x=cat_p["sample_time"],
                 y=cat_p["power_kw"],
-                mode="lines+markers",
+                mode=scatter_mode,
                 name=selected_category,
-                line={"color": "#d97706", "width": 3, "shape": "spline"},
-                marker={"size": 7, "color": "#d97706"},
+                line={"color": "#d97706", "width": 2.5, "shape": "spline"},
+                marker={"size": 6, "color": "#d97706"} if use_markers else {},
                 fill="tozeroy",
                 fillcolor="rgba(217, 119, 6, 0.08)",
                 hovertemplate="<b>%{x}</b><br>" + selected_category + "总负荷: <b>%{y:,.2f} kW</b><extra></extra>",
             )
         )
         fig.update_layout(
-            title={"text": f"{selected_category} 实时总负荷走势 (kW)", "font": {"size": 15, "color": "#b45309"}},
+            title={"text": f"{selected_category} 实时总负荷走势 (kW){tag_suffix}", "font": {"size": 15, "color": "#b45309"}},
         )
 
     fig.update_layout(
@@ -661,9 +677,9 @@ def plot_realtime_load_curve(
         paper_bgcolor="white",
         plot_bgcolor="white",
         hovermode="x unified",
-        xaxis={"showgrid": False, "fixedrange": True},
+        xaxis={"showgrid": False, "fixedrange": False, "tickfont": {"color": "#638072", "size": 11}},
         yaxis={
-            "title": {"text": "实时负荷功率 (kW)", "font": {"color": "#638072", "size": 12}},
+            "title": {"text": "负荷功率 (kW)", "font": {"color": "#638072", "size": 12}},
             "gridcolor": "#edf4f0",
             "zeroline": False,
             "fixedrange": True,
@@ -731,13 +747,13 @@ def render_live_dashboard(db_path: Path):
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
     # 统计周期过滤器
-    period_options = {"近 7 天": 7, "近 14 天": 14, "近 30 天": 30, "全部历史": None}
+    period_options = {"今日 (实时)": 1, "近 7 天": 7, "近 14 天": 14, "近 30 天": 30, "全部历史": None}
     col_filter_l, col_filter_r = st.columns([4, 1])
     with col_filter_r:
-        selected_period = st.selectbox("统计周期", list(period_options.keys()), index=0, label_visibility="collapsed")
+        selected_period = st.selectbox("统计周期", list(period_options.keys()), index=1, label_visibility="collapsed")
     days_limit = period_options[selected_period]
 
-    # 根据时间筛选数据
+    # 根据时间筛选日用电数据
     if not usage_daily.empty and days_limit is not None:
         max_date = usage_daily["日期"].max()
         cutoff_date = max_date - timedelta(days=days_limit - 1)
@@ -748,6 +764,14 @@ def render_live_dashboard(db_path: Path):
         u_view = usage_daily.copy()
         c_view = category_daily.copy()
         m_view = meter_daily.copy()
+
+    # 根据时间筛选 15 分钟负荷采样数据 (服从全局设定的统计周期)
+    if not samples_df.empty and days_limit is not None:
+        ref_date = max_date if not usage_daily.empty else samples_df["datetime"].max().date()
+        cutoff_dt = pd.to_datetime(ref_date - timedelta(days=days_limit - 1))
+        s_view = samples_df[samples_df["datetime"] >= cutoff_dt].copy()
+    else:
+        s_view = samples_df.copy()
 
     # ---------------------------------------------------------
     # 核心运营指标与同环比计算
@@ -919,7 +943,7 @@ def render_live_dashboard(db_path: Path):
                 cat_summary["用电量(kWh)"] = cat_summary["用电量(kWh)"].round(1)
                 st.dataframe(
                     cat_summary,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     column_config={
                         "分类": st.column_config.TextColumn("用电分类", width="medium"),
@@ -948,7 +972,7 @@ def render_live_dashboard(db_path: Path):
             unsafe_allow_html=True,
         )
 
-        if not samples_df.empty:
+        if not s_view.empty:
             # 模式切换选择器
             mode_labels = {
                 "total": "🏢 全园区实时总负荷走势",
@@ -964,7 +988,7 @@ def render_live_dashboard(db_path: Path):
                 label_visibility="collapsed"
             )
 
-            ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1, 1])
+            ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns([1.8, 1, 1, 1.2])
 
             selected_meters_list = []
             selected_cat_name = None
@@ -1000,32 +1024,39 @@ def render_live_dashboard(db_path: Path):
 
             elif sel_mode_key == "category":
                 with ctrl_col1:
-                    all_cats = sorted(samples_df["category"].dropna().unique().tolist())
+                    all_cats = sorted(s_view["category"].dropna().unique().tolist())
                     selected_cat_name = st.selectbox("选择用电场景", all_cats, index=0)
 
-            # 实时负荷关键指标提示
+            # 实时负荷关键指标提示（基于最新瞬时值）与所选周期负荷极值
             latest_time = samples_df["sample_time"].max()
             latest_slice = samples_df[samples_df["sample_time"] == latest_time]
             current_total_kw = latest_slice["power_kw"].sum() if not latest_slice.empty else 0.0
 
-            with ctrl_col2:
-                st.metric("最新采样时间", latest_time.split(" ")[1] if latest_time else "—", "15 分钟节拍")
-            with ctrl_col3:
-                st.metric("当前全园瞬时负荷", f"{current_total_kw:,.2f} kW", f"{len(latest_slice)} 块电表已就绪")
+            time_grouped = s_view.groupby("sample_time")["power_kw"].sum()
+            period_peak_kw = time_grouped.max() if not time_grouped.empty else 0.0
+            period_avg_kw = time_grouped.mean() if not time_grouped.empty else 0.0
 
-            # 绘制对应的负荷曲线图
+            with ctrl_col2:
+                st.metric("最新采样时点", latest_time.split(" ")[1] if latest_time else "—", "15 分钟节拍")
+            with ctrl_col3:
+                st.metric("全园当前负荷", f"{current_total_kw:,.2f} kW", f"{len(latest_slice)} 表就绪")
+            with ctrl_col4:
+                st.metric(f"{selected_period}最高需量", f"{period_peak_kw:,.2f} kW", f"均值 {period_avg_kw:,.1f} kW")
+
+            # 绘制对应的负荷曲线图（服从全局设定的统计周期）
             fig_load = plot_realtime_load_curve(
-                samples_df,
+                s_view,
                 mode=sel_mode_key,
                 selected_meters=selected_meters_list,
-                selected_category=selected_cat_name
+                selected_category=selected_cat_name,
+                period_label=selected_period
             )
             st.plotly_chart(fig_load, use_container_width=True, config={"displayModeBar": False})
 
             # 单表模式下的参数卡片
             if sel_mode_key == "single" and selected_meters_list:
                 s_mno = selected_meters_list[0]
-                m_records = samples_df[samples_df["meter_no"] == s_mno].sort_values("sample_time", ascending=False)
+                m_records = s_view[s_view["meter_no"] == s_mno].sort_values("sample_time", ascending=False)
                 if not m_records.empty:
                     m_row = m_records.iloc[0]
                     pk_kw = m_records["power_kw"].max()
@@ -1042,7 +1073,8 @@ def render_live_dashboard(db_path: Path):
                             <span>• <b>通信方式</b>: {m_row.get('comm_type', '电信NB-IoT')}</span>
                             <span>• <b>继电器状态</b>: <span style='color:#059669; font-weight:700;'>{m_row['relay_status_desc']}</span></span>
                             <span>• <b>单表当前负荷</b>: <b style='color:#2563eb;'>{m_row['power_kw']:,.2f} kW</b></span>
-                            <span>• <b>日内最大需量</b>: <b style='color:#d97706;'>{pk_kw:,.2f} kW</b></span>
+                            <span>• <b>{selected_period}最高需量</b>: <b style='color:#d97706;'>{pk_kw:,.2f} kW</b></span>
+                            <span>• <b>{selected_period}平均负荷</b>: <b style='color:#059669;'>{avg_kw:,.2f} kW</b></span>
                             <span>• <b>折算总底数</b>: {m_row['real_kwh']:,.2f} kWh</span>
                           </div>
                         </div>
@@ -1050,7 +1082,7 @@ def render_live_dashboard(db_path: Path):
                         unsafe_allow_html=True,
                     )
         else:
-            st.info("暂未获取到 15 分钟采样数据。可通过运行 `python3 sync_energy_to_sqlite.py --mode sample` 拉取实时采样。")
+            st.info(f"在【{selected_period}】范围内暂未检索到 15 分钟负荷采样数据。可通过运行 `python3 sync_energy_to_sqlite.py --backfill-intraday 7` 扩展采样历史。")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1063,7 +1095,7 @@ def render_live_dashboard(db_path: Path):
             <div class='section-box'>
               <div class='section-title'>
                 <span>⚡ 24 块智能物联电表台账与工况全览</span>
-                <span></span>
+                <span style='font-size:12px; color:#059669; font-weight:normal;'>单表最新工况台账（每表一条，共 24 台在运）</span>
               </div>
               <div class='section-sub'>包含互感器变比规格、电信 NB-IoT 通信模组 IMEI、最新底数读数及继电器通断状态</div>
             """,
@@ -1071,10 +1103,17 @@ def render_live_dashboard(db_path: Path):
         )
 
         if not samples_df.empty:
+            # 提取每块电表的最新工况记录（确保 24 块电表每表仅展示一条最新工况台账，杜绝时序采样导致的行重复）
+            latest_meters = (
+                samples_df.sort_values("datetime")
+                .groupby("meter_no", as_index=False)
+                .last()
+            )
+
             # 过滤控件
             f_col1, f_col2, f_col3 = st.columns([1.2, 1.8, 1])
             with f_col1:
-                categories = ["全部分类"] + sorted(samples_df["category"].dropna().unique().tolist())
+                categories = ["全部分类"] + sorted(latest_meters["category"].dropna().unique().tolist())
                 selected_cat = st.selectbox("筛选用电场景", categories, index=0)
             with f_col2:
                 search_kw = st.text_input("搜索电表号或安装点位", placeholder="输入点位名称（如：花房、空调、水泵、弱电间）或表号...")
@@ -1082,7 +1121,7 @@ def render_live_dashboard(db_path: Path):
                 st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
                 # 一键导出 CSV 按钮
                 csv_buffer = io.StringIO()
-                export_cols = samples_df[[
+                export_cols = latest_meters[[
                     "meter_no", "room_detail_addr", "category", "rate", "ct_rate",
                     "real_kwh", "total_kwh", "power_kw", "relay_status_desc", "online_status_desc",
                     "comm_type", "imei_no", "sample_time"
@@ -1098,23 +1137,23 @@ def render_live_dashboard(db_path: Path):
                     data=csv_bytes,
                     file_name=f"电表实时台账_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
-            filtered_samples = samples_df.copy()
+            filtered_meters = latest_meters.copy()
             if selected_cat != "全部分类":
-                filtered_samples = filtered_samples[filtered_samples["category"] == selected_cat]
+                filtered_meters = filtered_meters[filtered_meters["category"] == selected_cat]
             if search_kw.strip():
                 kw = search_kw.strip()
-                filtered_samples = filtered_samples[
-                    filtered_samples["room_detail_addr"].str.contains(kw, case=False, na=False) |
-                    filtered_samples["meter_no"].str.contains(kw, case=False, na=False)
+                filtered_meters = filtered_meters[
+                    filtered_meters["room_detail_addr"].str.contains(kw, case=False, na=False) |
+                    filtered_meters["meter_no"].str.contains(kw, case=False, na=False)
                 ]
 
-            # 排序：最新时间降序
-            filtered_samples = filtered_samples.sort_values(["room_detail_addr", "sample_time"], ascending=[True, False])
+            # 排序：安装位置升序
+            filtered_meters = filtered_meters.sort_values("room_detail_addr", ascending=True)
 
-            display_cols = filtered_samples[[
+            display_cols = filtered_meters[[
                 "meter_no", "room_detail_addr", "category", "rate", "ct_rate",
                 "real_kwh", "power_kw", "relay_status_desc", "online_status_desc",
                 "comm_type", "imei_no", "sample_time"
@@ -1128,7 +1167,7 @@ def render_live_dashboard(db_path: Path):
 
             st.dataframe(
                 display_cols,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "折算真实底数(kWh)": st.column_config.NumberColumn(format="%.2f"),
@@ -1168,7 +1207,7 @@ def render_live_dashboard(db_path: Path):
         else:
             st.dataframe(
                 alarms_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "meter_no": "电表号",
@@ -1215,7 +1254,7 @@ def render_live_dashboard(db_path: Path):
                     data=exp_u_bytes,
                     file_name=f"园区每日用电报表_{datetime.now().strftime('%Y%m%d')}.csv",
                     mime="text/csv",
-                    use_container_width=True
+                    width="stretch"
                 )
             else:
                 st.info("暂无数据可供导出")
@@ -1229,7 +1268,7 @@ def render_live_dashboard(db_path: Path):
                     data=exp_c_bytes,
                     file_name=f"园区场景分类用电报表_{datetime.now().strftime('%Y%m%d')}.csv",
                     mime="text/csv",
-                    use_container_width=True
+                    width="stretch"
                 )
             else:
                 st.info("暂无数据可供导出")
@@ -1272,7 +1311,7 @@ with st.sidebar:
 
     st.divider()
 
-    if st.button("🔄 立即刷新数据", use_container_width=True):
+    if st.button("🔄 立即刷新数据", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 

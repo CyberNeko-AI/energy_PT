@@ -38,6 +38,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import json
 import logging
@@ -619,32 +620,37 @@ def backfill_intraday_samples(
     conn: sqlite3.Connection,
     sid: str,
     project_id: str,
-    target_date: str,
-    credentials: Optional[Tuple[str, str]] = None
+    target_spec: str = "today",
+    credentials: Optional[Tuple[str, str]] = None,
+    max_workers: int = 8
 ) -> Tuple[int, str]:
-    """回填指定日期从 00:00 至当期全天每 15 分钟的时序负荷采样到 meter_load_samples。"""
-    date_str = target_date.strip()
-    if date_str.lower() in ("today", "当前", "今天", ""):
-        date_str = datetime.now().strftime("%Y-%m-%d")
+    """回填指定日期或最近 N 天的 15 分钟级时序负荷采样到 meter_load_samples。
 
-    logger.info("[历史回填] 开始为日期 %s 批量回填 15 分钟级负荷采样数据...", date_str)
+    参数 target_spec:
+      - "today", "当前", "今天", "": 仅回填今天
+      - "YYYY-MM-DD": 回填指定单日
+      - "7", "14", "30" 等正整数: 回填过去 N 天
+    """
+    spec = str(target_spec).strip().lower()
     now = datetime.now()
-    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    dates_to_sync: List[str] = []
 
-    time_points = []
-    curr = datetime.strptime(f"{date_str} 00:00:00", "%Y-%m-%d %H:%M:%S")
-    end = datetime.strptime(f"{date_str} 23:45:00", "%Y-%m-%d %H:%M:%S")
-    if date_str == now.strftime("%Y-%m-%d"):
-        end = now
+    if spec.isdigit():
+        num_days = int(spec)
+        for i in range(num_days):
+            dates_to_sync.append((now - timedelta(days=i)).strftime("%Y-%m-%d"))
+    elif spec in ("today", "当前", "今天", ""):
+        dates_to_sync.append(now.strftime("%Y-%m-%d"))
+    else:
+        # 假定为 YYYY-MM-DD
+        dates_to_sync.append(target_spec.strip())
 
-    while curr <= end:
-        time_points.append(curr.strftime("%Y-%m-%d %H:%M:%S"))
-        curr += timedelta(minutes=15)
-
+    logger.info("[历史回填] 开始为日期列表 %s 批量并发回填 15 分钟级负荷采样数据...", dates_to_sync)
     cursor = conn.cursor()
     total_saved = 0
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-    for idx, dt_str in enumerate(time_points, 1):
+    def _fetch_single_slice(dt_str: str) -> Tuple[str, List[Dict[str, Any]]]:
         params = {
             "bar_project_id": project_id,
             "date": dt_str,
@@ -653,53 +659,66 @@ def backfill_intraday_samples(
             "pageSize": 50
         }
         url = f"{DEFAULT_BASE_URL}/platform/bar/engineer/getReadingDataInfo/V2?{urllib.parse.urlencode(params)}"
-        resp, sid = make_request(url, sid=sid, credentials=credentials)
+        resp, _ = make_request(url, sid=sid, credentials=credentials)
+        if resp and resp.get("code") == 0:
+            return dt_str, resp.get("data", {}).get("datas", [])
+        return dt_str, []
 
-        if not resp or resp.get("code") != 0:
-            continue
+    for date_str in dates_to_sync:
+        time_points = []
+        curr = datetime.strptime(f"{date_str} 00:00:00", "%Y-%m-%d %H:%M:%S")
+        end = datetime.strptime(f"{date_str} 23:45:00", "%Y-%m-%d %H:%M:%S")
+        if date_str == now.strftime("%Y-%m-%d"):
+            end = now
 
-        datas = resp.get("data", {}).get("datas", [])
-        if not datas:
-            continue
+        while curr <= end:
+            time_points.append(curr.strftime("%Y-%m-%d %H:%M:%S"))
+            curr += timedelta(minutes=15)
 
-        records = []
-        for item in datas:
-            meter_no = str(item.get("meter_no", "")).strip()
-            if not meter_no:
-                continue
+        logger.info("[历史回填] 正在并发获取 %s 的 %d 个 15 分钟采样时段...", date_str, len(time_points))
 
-            raw_total = item.get("zxygzdl")
-            if raw_total is None or str(raw_total).strip() in ("", "None"):
-                continue
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(_fetch_single_slice, time_points))
 
-            try:
-                total_kwh = float(raw_total)
-            except (ValueError, TypeError):
-                continue
+        day_records = []
+        for dt_str, datas in results:
+            for item in datas:
+                meter_no = str(item.get("meter_no", "")).strip()
+                if not meter_no:
+                    continue
 
-            if total_kwh <= 0.0:
-                continue
+                raw_total = item.get("zxygzdl")
+                if raw_total is None or str(raw_total).strip() in ("", "None"):
+                    continue
 
-            cons = item.get("mbr_cons_info", {}) or {}
-            raw_rate = cons.get("rate", "1")
-            try:
-                rate_val = float(raw_rate) if raw_rate else 1.0
-            except Exception:
-                rate_val = 1.0
+                try:
+                    total_kwh = float(raw_total)
+                except (ValueError, TypeError):
+                    continue
 
-            rate1 = float(item.get("zxygzdl1", 0.0) or 0.0)
-            rate2 = float(item.get("zxygzdl2", 0.0) or 0.0)
-            rate3 = float(item.get("zxygzdl3", 0.0) or 0.0)
-            rate4 = float(item.get("zxygzdl4", 0.0) or 0.0)
-            real_kwh = round(total_kwh * rate_val, 2)
+                if total_kwh <= 0.0:
+                    continue
 
-            records.append((
-                meter_no, project_id, dt_str,
-                total_kwh, rate1, rate2, rate3, rate4,
-                rate_val, real_kwh, "合闸", "在线", now_str
-            ))
+                cons = item.get("mbr_cons_info", {}) or {}
+                raw_rate = cons.get("rate", "1")
+                try:
+                    rate_val = float(raw_rate) if raw_rate else 1.0
+                except Exception:
+                    rate_val = 1.0
 
-        if records:
+                rate1 = float(item.get("zxygzdl1", 0.0) or 0.0)
+                rate2 = float(item.get("zxygzdl2", 0.0) or 0.0)
+                rate3 = float(item.get("zxygzdl3", 0.0) or 0.0)
+                rate4 = float(item.get("zxygzdl4", 0.0) or 0.0)
+                real_kwh = round(total_kwh * rate_val, 2)
+
+                day_records.append((
+                    meter_no, project_id, dt_str,
+                    total_kwh, rate1, rate2, rate3, rate4,
+                    rate_val, real_kwh, "合闸", "在线", now_str
+                ))
+
+        if day_records:
             cursor.executemany("""
             INSERT INTO meter_load_samples (
                 meter_no, project_id, sample_time,
@@ -717,13 +736,12 @@ def backfill_intraday_samples(
                 relay_status = excluded.relay_status,
                 online_status = excluded.online_status,
                 created_at = excluded.created_at;
-            """, records)
+            """, day_records)
             conn.commit()
-            total_saved += len(records)
+            total_saved += len(day_records)
+            logger.info("[历史回填] 日期 %s 成功写入 %d 条 15 分钟负荷样本。", date_str, len(day_records))
 
-        time.sleep(0.04)
-
-    logger.info("[历史回填] 日期 %s 成功回填 %d 条 15 分钟负荷时序记录！", date_str, total_saved)
+    logger.info("[历史回填] 全部回填完成！共计持久化 %d 条 15 分钟负荷时序记录。", total_saved)
     return total_saved, sid
 
 
