@@ -615,6 +615,119 @@ def sync_load_samples(
     return len(sample_records), sid
 
 
+def backfill_intraday_samples(
+    conn: sqlite3.Connection,
+    sid: str,
+    project_id: str,
+    target_date: str,
+    credentials: Optional[Tuple[str, str]] = None
+) -> Tuple[int, str]:
+    """回填指定日期从 00:00 至当期全天每 15 分钟的时序负荷采样到 meter_load_samples。"""
+    date_str = target_date.strip()
+    if date_str.lower() in ("today", "当前", "今天", ""):
+        date_str = datetime.now().strftime("%Y-%m-%d")
+
+    logger.info("[历史回填] 开始为日期 %s 批量回填 15 分钟级负荷采样数据...", date_str)
+    now = datetime.now()
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    time_points = []
+    curr = datetime.strptime(f"{date_str} 00:00:00", "%Y-%m-%d %H:%M:%S")
+    end = datetime.strptime(f"{date_str} 23:45:00", "%Y-%m-%d %H:%M:%S")
+    if date_str == now.strftime("%Y-%m-%d"):
+        end = now
+
+    while curr <= end:
+        time_points.append(curr.strftime("%Y-%m-%d %H:%M:%S"))
+        curr += timedelta(minutes=15)
+
+    cursor = conn.cursor()
+    total_saved = 0
+
+    for idx, dt_str in enumerate(time_points, 1):
+        params = {
+            "bar_project_id": project_id,
+            "date": dt_str,
+            "bar_measure_type": "00080001",
+            "pageNumber": 1,
+            "pageSize": 50
+        }
+        url = f"{DEFAULT_BASE_URL}/platform/bar/engineer/getReadingDataInfo/V2?{urllib.parse.urlencode(params)}"
+        resp, sid = make_request(url, sid=sid, credentials=credentials)
+
+        if not resp or resp.get("code") != 0:
+            continue
+
+        datas = resp.get("data", {}).get("datas", [])
+        if not datas:
+            continue
+
+        records = []
+        for item in datas:
+            meter_no = str(item.get("meter_no", "")).strip()
+            if not meter_no:
+                continue
+
+            raw_total = item.get("zxygzdl")
+            if raw_total is None or str(raw_total).strip() in ("", "None"):
+                continue
+
+            try:
+                total_kwh = float(raw_total)
+            except (ValueError, TypeError):
+                continue
+
+            if total_kwh <= 0.0:
+                continue
+
+            cons = item.get("mbr_cons_info", {}) or {}
+            raw_rate = cons.get("rate", "1")
+            try:
+                rate_val = float(raw_rate) if raw_rate else 1.0
+            except Exception:
+                rate_val = 1.0
+
+            rate1 = float(item.get("zxygzdl1", 0.0) or 0.0)
+            rate2 = float(item.get("zxygzdl2", 0.0) or 0.0)
+            rate3 = float(item.get("zxygzdl3", 0.0) or 0.0)
+            rate4 = float(item.get("zxygzdl4", 0.0) or 0.0)
+            real_kwh = round(total_kwh * rate_val, 2)
+
+            records.append((
+                meter_no, project_id, dt_str,
+                total_kwh, rate1, rate2, rate3, rate4,
+                rate_val, real_kwh, "合闸", "在线", now_str
+            ))
+
+        if records:
+            cursor.executemany("""
+            INSERT INTO meter_load_samples (
+                meter_no, project_id, sample_time,
+                total_kwh, rate1_kwh, rate2_kwh, rate3_kwh, rate4_kwh,
+                multiplier, real_kwh, relay_status, online_status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(meter_no, sample_time) DO UPDATE SET
+                total_kwh = excluded.total_kwh,
+                rate1_kwh = excluded.rate1_kwh,
+                rate2_kwh = excluded.rate2_kwh,
+                rate3_kwh = excluded.rate3_kwh,
+                rate4_kwh = excluded.rate4_kwh,
+                multiplier = excluded.multiplier,
+                real_kwh = excluded.real_kwh,
+                relay_status = excluded.relay_status,
+                online_status = excluded.online_status,
+                created_at = excluded.created_at;
+            """, records)
+            conn.commit()
+            total_saved += len(records)
+
+        time.sleep(0.04)
+
+    logger.info("[历史回填] 日期 %s 成功回填 %d 条 15 分钟负荷时序记录！", date_str, total_saved)
+    return total_saved, sid
+
+
+
 # =============================================================================
 # 三、分钟级同步：突发告警事件轮询 (1-min Alarms)
 # =============================================================================
@@ -837,6 +950,7 @@ def main():
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="SQLite 数据库文件路径")
     parser.add_argument("--date", default="", help="指定日冻结拉取日期 (格式: YYYY-MM-DD)")
     parser.add_argument("--days", type=int, default=1, help="回溯同步过去 N 天的日冻结读数（默认 1 天）")
+    parser.add_argument("--backfill-intraday", default="", help="回填指定日期 (YYYY-MM-DD 或 today) 全天 15 分钟时序负荷采样")
     parser.add_argument("--summary", action="store_true", help="打印本地数据库统计概览并退出")
 
     args = parser.parse_args()
@@ -873,6 +987,10 @@ def main():
     # 第二级：15分钟实时负荷与工况采样 (sample 或 all)
     if args.mode in ("sample", "all"):
         sync_load_samples(conn, sid, args.project_id, args.project_name, credentials)
+
+    # 历史 15 分钟负荷回填
+    if args.backfill_intraday:
+        backfill_intraday_samples(conn, sid, args.project_id, args.backfill_intraday, credentials)
 
     # 第三级：突发告警事件扫描 (alarm 或 all)
     if args.mode in ("alarm", "all"):
