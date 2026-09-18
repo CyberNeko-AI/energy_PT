@@ -5,3 +5,5 @@
 __pycache__/*
 .ppt_build/node_modules
 *.pkl
+.bbi_session
+*.db
