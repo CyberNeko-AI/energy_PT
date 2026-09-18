@@ -852,7 +852,7 @@ def render_live_dashboard(db_path: Path):
                 """,
                 unsafe_allow_html=True,
             )
-            st.plotly_chart(plot_daily_trend(u_view), use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(plot_daily_trend(u_view), width="stretch", config={"displayModeBar": False})
             st.markdown("</div>", unsafe_allow_html=True)
 
             # 2. 分类用电日分布条形图
@@ -867,7 +867,7 @@ def render_live_dashboard(db_path: Path):
                 """,
                 unsafe_allow_html=True,
             )
-            st.plotly_chart(plot_category_stacked_bars(c_view), use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(plot_category_stacked_bars(c_view), width="stretch", config={"displayModeBar": False})
             st.markdown("</div>", unsafe_allow_html=True)
 
         with col_side:
@@ -879,7 +879,7 @@ def render_live_dashboard(db_path: Path):
                 """,
                 unsafe_allow_html=True,
             )
-            st.plotly_chart(plot_category_donut(c_view), use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(plot_category_donut(c_view), width="stretch", config={"displayModeBar": False})
             st.markdown("</div>", unsafe_allow_html=True)
 
             # 2. 运行摘要卡
@@ -927,7 +927,7 @@ def render_live_dashboard(db_path: Path):
                 """,
                 unsafe_allow_html=True,
             )
-            st.plotly_chart(plot_top_consumers_bar(m_view), use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(plot_top_consumers_bar(m_view), width="stretch", config={"displayModeBar": False})
             st.markdown("</div>", unsafe_allow_html=True)
 
         with c_sub2:
@@ -1055,7 +1055,7 @@ def render_live_dashboard(db_path: Path):
                 selected_category=selected_cat_name,
                 period_label=selected_period
             )
-            st.plotly_chart(fig_load, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig_load, width="stretch", config={"displayModeBar": False})
 
             # 单表模式下的参数卡片
             if sel_mode_key == "single" and selected_meters_list:
