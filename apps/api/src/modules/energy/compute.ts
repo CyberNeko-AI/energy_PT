@@ -154,8 +154,13 @@ export function computeDailyUsage(rows: MeterReadingRow[]): DailyUsageResult {
 }
 
 /**
- * 15 分钟负荷功率推算：P = ΔE / Δt。
- * 对应 pandas: sort -> shift(1) -> hours_diff/delta_kwh -> 过滤 0<hours<=24 -> bfill -> fillna(0)。
+ * 15 分钟负荷功率推算（含「批式补记」平滑）。
+ *
+ * 上游 NB-IoT 电表并非严格每 15 分钟上报，而是「间歇上报 + 平台补位」：
+ * 未上报期间底数保持不变（持平），下一次上报时一次性补记累计增量。若按固定
+ * 15 分钟直接做差，会把补记增量放大成假峰，因此：
+ *   - 常规 15 分钟间隔：把增量「前向分摊」到随后的持平区间（直到下一次底数变化）；
+ *   - 采样缺口（间隔 > 15 分钟）：增量是缺口期间累计的，按真实缺口时长折算。
  */
 export function computePowerSamples(rows: LoadSampleRow[]): PowerSampleRow[] {
   const withDt = rows.map((r) => ({ ...r, datetime: parseLocalDateTime(r.sample_time) }));
@@ -173,30 +178,38 @@ export function computePowerSamples(rows: LoadSampleRow[]): PowerSampleRow[] {
 
   const result: PowerSampleRow[] = [];
   for (const list of groups.values()) {
-    const powers = new Array<number>(list.length).fill(Number.NaN);
-    for (let i = 0; i < list.length; i++) {
-      const prev = list[i - 1];
-      if (!prev) continue;
-      const cur = list[i];
-      const hours = (cur.datetime.getTime() - prev.datetime.getTime()) / 3_600_000;
-      const delta = Math.max(0, cur.real_kwh - prev.real_kwh);
-      if (hours > 0 && hours <= 24) powers[i] = delta / hours;
+    const n = list.length;
+    const powers = new Array<number>(n).fill(0);
+
+    // 底数较上一点上升的「变更点」索引
+    const changes: number[] = [];
+    for (let i = 1; i < n; i++) {
+      if (list[i].real_kwh > list[i - 1].real_kwh) changes.push(i);
     }
 
-    // 后向填充（bfill）：NaN 取其后最近的合法值
-    let lastValid = Number.NaN;
-    for (let i = list.length - 1; i >= 0; i--) {
-      if (!Number.isNaN(powers[i])) lastValid = powers[i];
-      else powers[i] = lastValid;
+    for (let k = 0; k < changes.length; k++) {
+      const i = changes[k];
+      const delta = list[i].real_kwh - list[i - 1].real_kwh;
+      if (delta <= 0) continue;
+      const hours = (list[i].datetime.getTime() - list[i - 1].datetime.getTime()) / 3_600_000;
+
+      if (hours > 0.26) {
+        // 采样缺口：增量是缺口期间累计的，按真实缺口时长折算，避免放大
+        powers[i] = delta / hours;
+      } else {
+        // 常规 15 分钟间隔：前向分摊到随后的持平区间（含变更点本身）
+        const j = k + 1 < changes.length ? changes[k + 1] : n;
+        const spread = j - i; // 覆盖点数
+        const power = delta / (spread * 0.25);
+        for (let p = i; p < j; p++) powers[p] = power;
+      }
     }
 
-    for (let i = 0; i < list.length; i++) {
-      const raw = powers[i];
-      const power_kw = Number.isNaN(raw) ? 0 : Math.round(raw * 100) / 100;
+    for (let i = 0; i < n; i++) {
       const row = list[i];
       result.push({
         ...row,
-        power_kw,
+        power_kw: round2(powers[i]),
         relay_status_desc: normalizeRelayStatus(row.relay_status),
         online_status_desc: normalizeOnlineStatus(row.online_status),
       });

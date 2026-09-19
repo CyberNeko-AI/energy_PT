@@ -84,15 +84,10 @@ export class EnergyController {
       { key: 'meterNo', label: '电表编号' },
       { key: 'roomDetailAddr', label: '安装点位' },
       { key: 'category', label: '用电分类' },
-      { key: 'rate', label: '变比倍率' },
-      { key: 'ctRate', label: 'CT/PT规格' },
       { key: 'realKwh', label: '折算真实底数(kWh)' },
-      { key: 'totalKwh', label: '表盘原始底数' },
       { key: 'powerKw', label: '实时功率(kW)' },
       { key: 'relayStatusDesc', label: '继电器状态' },
       { key: 'onlineStatusDesc', label: '在线状态' },
-      { key: 'commType', label: '通信方式' },
-      { key: 'imeiNo', label: 'IMEI设备号' },
       { key: 'sampleTime', label: '最新采样时间' },
     ];
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');

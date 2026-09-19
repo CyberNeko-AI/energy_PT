@@ -25,6 +25,11 @@ body {
 /* 侧边栏渐变 */
 .energy-sider {
   background: linear-gradient(180deg, #09472e 0%, #063422 100%) !important;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  align-self: flex-start;
 }
 .energy-sider .ant-layout-sider-children {
   padding: 22px 18px;
@@ -107,13 +112,17 @@ body {
   background: #ffffff !important;
   border-color: rgba(255, 255, 255, 0.4) !important;
 }
-.energy-sider .ant-picker input {
+.energy-sider .ant-picker,
+.energy-sider .ant-picker * {
   color: #163d30 !important;
 }
-.energy-sider .ant-picker .ant-picker-suffix,
-.energy-sider .ant-picker .ant-picker-separator,
-.energy-sider .ant-picker .ant-picker-clear {
+.energy-sider .ant-picker input::placeholder {
   color: #163d30 !important;
+  opacity: 1;
+}
+.energy-sider .ant-picker svg,
+.energy-sider .ant-picker svg path {
+  fill: #163d30 !important;
 }
 
 /* 标题与状态栏 */

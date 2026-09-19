@@ -8,6 +8,7 @@ import { EnergyModule } from './modules/energy/energy.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { SyncModule } from './modules/sync/sync.module';
 import { RepairModule } from './modules/repair/repair.module';
+import { PlatformAuthModule } from './modules/platform-auth/platform-auth.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { RepairModule } from './modules/repair/repair.module';
     EnergyModule,
     SyncModule,
     RepairModule,
+    PlatformAuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

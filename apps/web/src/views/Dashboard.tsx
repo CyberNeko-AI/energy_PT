@@ -1,14 +1,14 @@
 import { useState } from 'react';
-import { Button, Col, DatePicker, Layout, Menu, Row } from 'antd';
+import { Button, Col, DatePicker, Layout, Menu, Row, Space } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
+import { LogoutOutlined } from '@ant-design/icons';
 import { useKpi, useOverview } from '../api/queries';
 import { KpiCard } from '../components/KpiCard';
 import { OverviewTab } from './tabs/OverviewTab';
 import { LoadCurveTab } from './tabs/LoadCurveTab';
 import { MeterTab } from './tabs/MeterTab';
 import { AlarmTab } from './tabs/AlarmTab';
-import { SyncTab } from './tabs/SyncTab';
 
 const { Sider, Content } = Layout;
 const { RangePicker } = DatePicker;
@@ -18,7 +18,6 @@ const TAB_ITEMS = [
   { key: 'load', label: '📈 实时负荷与单表曲线' },
   { key: 'meters', label: '⚡ 表计台账与工况全览' },
   { key: 'alarms', label: '🚨 突发告警监测中心' },
-  { key: 'sync', label: '⚙️ 系统通道与同步管理' },
 ];
 
 function fmt(n: number, digits = 1): string {
@@ -57,6 +56,11 @@ export default function Dashboard() {
 
   const alarmActive = (k?.alarmCount ?? 0) > 0;
 
+  const logout = () => {
+    localStorage.removeItem('energy_token');
+    window.dispatchEvent(new Event('energy-auth-expired'));
+  };
+
   const renderTab = () => {
     switch (activeTab) {
       case 'load':
@@ -65,8 +69,6 @@ export default function Dashboard() {
         return <MeterTab />;
       case 'alarms':
         return <AlarmTab />;
-      case 'sync':
-        return <SyncTab start={start} end={end} />;
       case 'overview':
       default:
         return <OverviewTab start={start} end={end} />;
@@ -87,11 +89,15 @@ export default function Dashboard() {
             format="YYYY-MM-DD"
             size="small"
             allowClear
+            disabledDate={(current) => current.isAfter(dayjs(), 'day')}
             style={{ width: '100%' }}
             presets={[
+              { label: '当日', value: [dayjs(), dayjs()] },
               { label: '近 7 天', value: [dayjs().subtract(6, 'day'), dayjs()] },
               { label: '近 14 天', value: [dayjs().subtract(13, 'day'), dayjs()] },
               { label: '近 30 天', value: [dayjs().subtract(29, 'day'), dayjs()] },
+              { label: '最近一季度', value: [dayjs().subtract(3, 'month'), dayjs()] },
+              { label: '最近一年', value: [dayjs().subtract(1, 'year'), dayjs()] },
             ]}
           />
         </div>
@@ -107,24 +113,23 @@ export default function Dashboard() {
           />
         </div>
 
-        <div className="sider-block">
-          <h4>📡 数据通道状态</h4>
-          <div className="sider-row"><span>存储媒介</span><span>本地 SQLite</span></div>
-          <div className="sider-row"><span>表计总数</span><span>24 块智能物联电表</span></div>
-          <div className="sider-row"><span>通信方式</span><span>电信 NB-IoT</span></div>
-          <div className="sider-row"><span>负荷采样</span><span>每 15 分钟级推算</span></div>
-        </div>
-
-        <Button
-          block
-          onClick={() => queryClient.invalidateQueries()}
-          style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', color: '#ebf7f0' }}
-        >
-          🔄 立即刷新数据
-        </Button>
-        <div style={{ fontSize: 11.5, color: '#9fc4b1', marginTop: 12, lineHeight: 1.6 }}>
-          提示：页面每 10 秒自动轮询 SQLite 数据库。当后台同步写入新数据时，页面将无感实时更新。
-        </div>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Button
+            block
+            onClick={() => queryClient.invalidateQueries()}
+            style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', color: '#ebf7f0' }}
+          >
+            🔄 立即刷新数据
+          </Button>
+          <Button
+            block
+            icon={<LogoutOutlined />}
+            onClick={logout}
+            style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: '#ffd6d6' }}
+          >
+            退出登录
+          </Button>
+        </Space>
       </Sider>
 
       <Content style={{ padding: '22px 26px 40px' }}>
@@ -133,16 +138,13 @@ export default function Dashboard() {
           <Col>
             <div className="dash-title">🌿 绿城园区能源数据监控中心</div>
             <div className="dash-subtitle">
-              项目：<b>{o?.project?.project_name ?? '宁波慈溪凤起潮鸣'}</b> · 智能物联网实时感知台账 (ID:{' '}
-              {o?.project?.project_id ?? '202607020000000001'})
+              项目：<b>{o?.project?.project_name ?? '宁波慈溪凤起潮鸣'}</b> · 园区智能电表实时监控
             </div>
           </Col>
           <Col>
             <div className="status-badge">
               <span className="pulse-dot" />
-              <span>SQLite 实时在线</span>
-              <span style={{ color: '#7da190', fontWeight: 400 }}>|</span>
-              <span>{o?.dbMtime?.split(' ')[1] ?? '—'} 步进更新</span>
+              <span>系统运行正常</span>
             </div>
           </Col>
         </Row>

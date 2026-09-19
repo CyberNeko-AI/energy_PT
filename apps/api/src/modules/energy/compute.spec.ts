@@ -117,24 +117,39 @@ describe('computeDailyUsage', () => {
 });
 
 describe('computePowerSamples', () => {
-  it('P = ΔE/Δt 且首点 bfill', () => {
+  it('跳变后跟随持平段时，增量被前向分摊（批式补记平滑）', () => {
     const rows: LoadSampleRow[] = [
       sample('M', '2026-09-18 00:00:00', 100),
-      sample('M', '2026-09-18 00:15:00', 101), // 1 kWh / 0.25h = 4 kW
-      sample('M', '2026-09-18 00:30:00', 101), // 0 kW
+      sample('M', '2026-09-18 00:15:00', 102.45), // +2.45 正常
+      sample('M', '2026-09-18 00:30:00', 114.7), // +12.25 批式补记
+      sample('M', '2026-09-18 00:45:00', 114.7), // 持平
+      sample('M', '2026-09-18 01:00:00', 114.7), // 持平
+      sample('M', '2026-09-18 01:15:00', 114.7), // 持平
+      sample('M', '2026-09-18 01:30:00', 114.7), // 持平
+      sample('M', '2026-09-18 01:45:00', 117.16), // +2.46 恢复
     ];
     const out = computePowerSamples(rows);
-    expect(out.map((r) => r.power_kw)).toEqual([4, 4, 0]);
+    // 12.25 kWh 分摊到 00:30~01:30 共 5 个点 => 12.25/1.25h = 9.8 kW
+    expect(out.map((r) => r.power_kw)).toEqual([0, 9.8, 9.8, 9.8, 9.8, 9.8, 9.8, 9.84]);
   });
 
-  it('超过 24 小时的采样间隔视为无效并 bfill', () => {
+  it('采样缺口(>15分钟)按真实缺口时长折算', () => {
     const rows: LoadSampleRow[] = [
       sample('M', '2026-09-01 00:00:00', 100),
-      sample('M', '2026-09-02 06:00:00', 101), // 30h 间隔，无效
-      sample('M', '2026-09-02 06:15:00', 103), // 2 kWh / 0.25h = 8 kW
+      sample('M', '2026-09-02 06:00:00', 101), // 30h 缺口，+1 kWh => 0.03 kW
+      sample('M', '2026-09-02 06:15:00', 103), // +2 kWh / 0.25h = 8 kW
     ];
     const out = computePowerSamples(rows);
-    // 第1点 NaN->bfill 到第3点(8)；第2点 NaN->bfill 到第3点(8)；第3点 8
-    expect(out.map((r) => r.power_kw)).toEqual([8, 8, 8]);
+    expect(out.map((r) => r.power_kw)).toEqual([0, 0.03, 8]);
+  });
+
+  it('常规连续 15 分钟上报保持原有功率（无持平段）', () => {
+    const rows: LoadSampleRow[] = [
+      sample('M', '2026-09-18 00:00:00', 100),
+      sample('M', '2026-09-18 00:15:00', 101), // +1 / 0.25h = 4 kW
+      sample('M', '2026-09-18 00:30:00', 102), // +1 / 0.25h = 4 kW
+    ];
+    const out = computePowerSamples(rows);
+    expect(out.map((r) => r.power_kw)).toEqual([0, 4, 4]);
   });
 });

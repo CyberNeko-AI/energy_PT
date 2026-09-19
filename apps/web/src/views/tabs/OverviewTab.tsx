@@ -92,8 +92,6 @@ export function OverviewTab({ start, end }: { start?: string; end?: string }) {
             <div className="side-info-title">园区运行摘要</div>
             <div className="info-row"><span>目标项目</span><span className="info-val">{proj?.project_name ?? '宁波慈溪凤起潮鸣'}</span></div>
             <div className="info-row"><span>在运电表</span><span className="info-val">{proj?.meter_count ?? 24} 台</span></div>
-            <div className="info-row"><span>通信方式</span><span className="info-val">电信 NB-IoT (100%)</span></div>
-            <div className="info-row"><span>高倍率互感器</span><span className="info-val">3 块 (40x, 30x, 20x)</span></div>
             <div className="info-row"><span>日冻结周期</span><span className="info-val">{data?.earliestDate ?? '—'} 至 {data?.newestDate ?? '—'}</span></div>
             <div className="info-row"><span>单日最高峰值</span><span className="info-val">{fmt(k?.peakDaily ?? 0)} kWh</span></div>
           </div>
