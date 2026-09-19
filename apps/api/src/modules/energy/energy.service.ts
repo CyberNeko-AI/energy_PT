@@ -5,7 +5,7 @@ import {
   EMISSION_FACTOR_TON_PER_KWH,
   type LoadCurveMode,
 } from '@energy/shared';
-import { DatabaseService, type DbFingerprint } from '../database/database.service';
+import { DatabaseService, type DbFingerprint, type DiskUsage } from '../database/database.service';
 import {
   computeDailyUsage,
   computePowerSamples,
@@ -81,6 +81,7 @@ export interface DateRange {
 
 interface CacheEntry {
   fingerprint: DbFingerprint;
+  changeVersion: number;
   data: DashboardData;
 }
 
@@ -95,15 +96,20 @@ export class EnergyService {
 
   constructor(private readonly db: DatabaseService) {}
 
-  /** 载入完整三级数据并聚合计算；按数据库指纹缓存，避免 10s 轮询反复重算。 */
+  /** 载入完整三级数据并聚合计算；按数据库指纹 + 写版本缓存，避免 10s 轮询反复重算。 */
   getDashboardData(): DashboardData {
     const fingerprint = this.db.fingerprint();
-    if (this.cache && this.sameFingerprint(this.cache.fingerprint, fingerprint)) {
+    const changeVersion = this.db.changeVersion;
+    if (
+      this.cache &&
+      this.sameFingerprint(this.cache.fingerprint, fingerprint) &&
+      this.cache.changeVersion === changeVersion
+    ) {
       return this.cache.data;
     }
 
     const data = this.loadAll(fingerprint);
-    this.cache = { fingerprint, data };
+    this.cache = { fingerprint, changeVersion, data };
     return data;
   }
 
@@ -208,6 +214,10 @@ export class EnergyService {
 
   getOverview() {
     const data = this.getDashboardData();
+    const disk = this.db.getDiskUsage();
+    if (disk.alarm) {
+      this.recordDiskAlarm(disk, data.project.project_id);
+    }
     return {
       connected: data.connected,
       dbPath: data.dbPath,
@@ -215,7 +225,35 @@ export class EnergyService {
       dbMtime: data.dbMtime,
       project: data.project,
       counts: data.counts,
+      disk,
     };
+  }
+
+  /** 记录磁盘空间超限告警（每天最多一条，避免重复写入）。 */
+  private recordDiskAlarm(disk: DiskUsage, projectId: string): void {
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = this.db.queryOne<{ id: number }>(
+      `SELECT id FROM alarm_events WHERE meter_no = :meter_no AND alarm_name = :alarm_name AND alarm_time = :alarm_time`,
+      { meter_no: 'SYSTEM', alarm_name: '磁盘空间超限', alarm_time: today },
+    );
+    if (existing) return;
+
+    const now = new Date().toLocaleString('sv-SE', { hour12: false }).replace('T', ' ');
+    this.db.run(
+      `INSERT INTO alarm_events (meter_no, project_id, alarm_time, alarm_name, alarm_code, room_addr, alarm_status, raw_data, created_at)
+       VALUES (:meter_no, :project_id, :alarm_time, :alarm_name, :alarm_code, :room_addr, :alarm_status, :raw_data, :created_at)`,
+      {
+        meter_no: 'SYSTEM',
+        project_id: projectId,
+        alarm_time: today,
+        alarm_name: '磁盘空间超限',
+        alarm_code: 'DISK_USAGE_HIGH',
+        room_addr: '系统',
+        alarm_status: '告警中',
+        raw_data: JSON.stringify(disk),
+        created_at: now,
+      },
+    );
   }
 
   getKpi(start?: string, end?: string) {

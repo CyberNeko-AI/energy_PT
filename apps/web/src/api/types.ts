@@ -8,6 +8,14 @@ export interface ProjectInfo {
   updated_at: string | null;
 }
 
+export interface DiskUsage {
+  totalBytes: number;
+  dbBytes: number;
+  usagePercent: number;
+  thresholdPercent: number;
+  alarm: boolean;
+}
+
 export interface Overview {
   connected: boolean;
   dbPath: string;
@@ -15,6 +23,7 @@ export interface Overview {
   dbMtime: string;
   project: ProjectInfo;
   counts: Record<string, number>;
+  disk: DiskUsage;
 }
 
 export interface Trend {

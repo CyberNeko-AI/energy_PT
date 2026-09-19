@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Col, DatePicker, Layout, Menu, Row, Space } from 'antd';
+import { Alert, Button, Col, DatePicker, Layout, Menu, Row, Space } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 import { LogoutOutlined } from '@ant-design/icons';
@@ -22,6 +22,13 @@ const TAB_ITEMS = [
 
 function fmt(n: number, digits = 1): string {
   return n.toLocaleString('zh-CN', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+
+function fmtBytes(bytes: number): string {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }
 
 export default function Dashboard() {
@@ -133,6 +140,16 @@ export default function Dashboard() {
       </Sider>
 
       <Content style={{ padding: '22px 26px 40px' }}>
+        {o?.disk?.alarm && (
+          <Alert
+            type="error"
+            showIcon
+            banner
+            message={`磁盘空间告警：数据库大小 ${fmtBytes(o.disk.dbBytes)} 已达磁盘总空间 ${fmtBytes(o.disk.totalBytes)} 的 ${o.disk.usagePercent.toFixed(1)}%（阈值 ${o.disk.thresholdPercent}%），请及时清理或扩容磁盘。`}
+            style={{ marginBottom: 16 }}
+          />
+        )}
+
         {/* 顶部标题与状态栏 */}
         <Row align="middle" justify="space-between">
           <Col>
@@ -142,9 +159,12 @@ export default function Dashboard() {
             </div>
           </Col>
           <Col>
-            <div className="status-badge">
-              <span className="pulse-dot" />
-              <span>系统运行正常</span>
+            <div
+              className="status-badge"
+              style={o?.disk?.alarm ? { background: '#fef2f2', borderColor: '#fecaca', color: '#dc2626' } : undefined}
+            >
+              <span className="pulse-dot" style={o?.disk?.alarm ? { background: '#dc2626' } : undefined} />
+              <span>{o?.disk?.alarm ? '磁盘空间告警' : '系统运行正常'}</span>
             </div>
           </Col>
         </Row>
