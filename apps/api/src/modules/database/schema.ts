@@ -78,5 +78,6 @@ CREATE TABLE IF NOT EXISTS alarm_events (
 CREATE INDEX IF NOT EXISTS idx_readings_time ON meter_readings (data_time);
 CREATE INDEX IF NOT EXISTS idx_readings_meter ON meter_readings (meter_no);
 CREATE INDEX IF NOT EXISTS idx_samples_time ON meter_load_samples (sample_time);
+CREATE INDEX IF NOT EXISTS idx_samples_meter_time ON meter_load_samples (meter_no, sample_time);
 CREATE INDEX IF NOT EXISTS idx_alarms_time ON alarm_events (alarm_time);
 `;

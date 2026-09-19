@@ -57,6 +57,7 @@ export interface AlarmRow {
   created_at: string | null;
 }
 
+/** 看板基础数据（不含 15 分钟采样，采样按需下钻加载以控制内存）。 */
 export interface DashboardData {
   connected: boolean;
   error?: string;
@@ -68,7 +69,6 @@ export interface DashboardData {
   usageDaily: DailyUsagePoint[];
   categoryDaily: CategoryDailyPoint[];
   meterDaily: MeterDailyPoint[];
-  samples: PowerSampleRow[];
   alarms: AlarmRow[];
   counts: Record<string, number>;
 }
@@ -85,6 +85,18 @@ interface CacheEntry {
   data: DashboardData;
 }
 
+/** 采样行公共查询片段（JOIN meters 得到分类与点位）。 */
+const SAMPLE_SELECT = `
+  SELECT s.meter_no, s.sample_time, s.total_kwh, s.multiplier, s.real_kwh,
+         s.relay_status, s.online_status,
+         COALESCE(m.category, '其他负荷') AS category,
+         COALESCE(m.room_detail_addr, s.meter_no) AS room_detail_addr,
+         m.rate, m.ct_rate, m.pt_rate, m.comm_type, m.imei_no
+  FROM meter_load_samples s
+  LEFT JOIN meters m ON s.meter_no = m.meter_no
+  WHERE s.real_kwh > 0
+`;
+
 // ---------------------------------------------------------------------------
 // 服务
 // ---------------------------------------------------------------------------
@@ -96,7 +108,7 @@ export class EnergyService {
 
   constructor(private readonly db: DatabaseService) {}
 
-  /** 载入完整三级数据并聚合计算；按数据库指纹 + 写版本缓存，避免 10s 轮询反复重算。 */
+  /** 载入基础数据（不含采样）并聚合计算；按数据库指纹 + 写版本缓存。 */
   getDashboardData(): DashboardData {
     const fingerprint = this.db.fingerprint();
     const changeVersion = this.db.changeVersion;
@@ -144,18 +156,6 @@ export class EnergyService {
       ORDER BY r.meter_no, r.data_time
     `);
 
-    const sampleRows = this.db.queryAll<LoadSampleRow>(`
-      SELECT s.meter_no, s.sample_time, s.total_kwh, s.multiplier, s.real_kwh,
-             s.relay_status, s.online_status,
-             COALESCE(m.category, '其他负荷') AS category,
-             COALESCE(m.room_detail_addr, s.meter_no) AS room_detail_addr,
-             m.rate, m.ct_rate, m.pt_rate, m.comm_type, m.imei_no
-      FROM meter_load_samples s
-      LEFT JOIN meters m ON s.meter_no = m.meter_no
-      WHERE s.real_kwh > 0
-      ORDER BY s.meter_no, s.sample_time
-    `);
-
     const alarms = this.db.queryAll<AlarmRow>(`
       SELECT meter_no, project_id, alarm_time, alarm_name, alarm_code, room_addr, alarm_status, created_at
       FROM alarm_events ORDER BY alarm_time DESC
@@ -167,7 +167,6 @@ export class EnergyService {
     }
 
     const { usageDaily, categoryDaily, meterDaily } = computeDailyUsage(readings);
-    const samples = computePowerSamples(sampleRows);
 
     return {
       connected: true,
@@ -179,14 +178,72 @@ export class EnergyService {
       usageDaily,
       categoryDaily,
       meterDaily,
-      samples,
       alarms,
       counts,
     };
   }
 
   // -------------------------------------------------------------------------
-  // 日期范围筛选
+  // 采样下钻（按需加载，避免全量驻留内存）
+  // -------------------------------------------------------------------------
+
+  /** 每表最近两条采样，用于推算最新功率；返回每表最新一条（含 power_kw）。 */
+  private getLatestSamples(): PowerSampleRow[] {
+    const rows = this.db.queryAll<LoadSampleRow>(`
+      SELECT * FROM (
+        SELECT s.meter_no, s.sample_time, s.total_kwh, s.multiplier, s.real_kwh,
+               s.relay_status, s.online_status,
+               COALESCE(m.category, '其他负荷') AS category,
+               COALESCE(m.room_detail_addr, s.meter_no) AS room_detail_addr,
+               m.rate, m.ct_rate, m.pt_rate, m.comm_type, m.imei_no,
+               ROW_NUMBER() OVER (PARTITION BY s.meter_no ORDER BY s.sample_time DESC) AS rn
+        FROM meter_load_samples s
+        LEFT JOIN meters m ON s.meter_no = m.meter_no
+        WHERE s.real_kwh > 0
+      ) WHERE rn <= 2
+      ORDER BY meter_no, sample_time
+    `);
+    const computed = computePowerSamples(rows);
+    const latestByMeter = new Map<string, PowerSampleRow>();
+    for (const s of computed) latestByMeter.set(s.meter_no, s);
+    return [...latestByMeter.values()];
+  }
+
+  /** 按日期范围加载采样（前后各多取一天保证区间边界功率正确），计算功率后裁剪到区间。 */
+  private getRangeSamples(range: DateRange): PowerSampleRow[] {
+    const params: Record<string, string> = {};
+    let sql = SAMPLE_SELECT;
+
+    if (range.start) {
+      params.lower = `${this.addDays(range.start, -1)} 00:00:00`;
+      sql += ` AND s.sample_time >= :lower`;
+    }
+    if (range.end) {
+      params.upper = `${this.addDays(range.end, 1)} 23:59:59`;
+      sql += ` AND s.sample_time <= :upper`;
+    }
+    sql += ` ORDER BY s.meter_no, s.sample_time`;
+
+    const rows = this.db.queryAll<LoadSampleRow>(sql, params);
+    const computed = computePowerSamples(rows);
+
+    const startTs = range.start ? parseLocalDateTime(`${range.start} 00:00:00`).getTime() : Number.NEGATIVE_INFINITY;
+    const endTs = range.end ? parseLocalDateTime(`${range.end} 23:59:59`).getTime() : Number.POSITIVE_INFINITY;
+    return computed.filter((s) => s.datetime.getTime() >= startTs && s.datetime.getTime() <= endTs);
+  }
+
+  private addDays(dateStr: string, delta: number): string {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() + delta);
+    const yy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getDate()).padStart(2, '0');
+    return `${yy}-${mm}-${dd}`;
+  }
+
+  // -------------------------------------------------------------------------
+  // 日期范围筛选（日级数据，量小，仍在内存过滤）
   // -------------------------------------------------------------------------
 
   resolveRange(start?: string, end?: string): DateRange {
@@ -199,13 +256,6 @@ export class EnergyService {
   /** 按日期范围过滤日级数据（闭区间，日期字符串可直接比较）。 */
   filterDailyByRange<T extends { date: string }>(rows: T[], range: DateRange): T[] {
     return rows.filter((r) => (!range.start || r.date >= range.start) && (!range.end || r.date <= range.end));
-  }
-
-  /** 按日期范围过滤 15 分钟采样（含起止当日的完整边界）。 */
-  filterSamplesByRange(samples: PowerSampleRow[], range: DateRange): PowerSampleRow[] {
-    const startMs = range.start ? parseLocalDateTime(`${range.start} 00:00:00`).getTime() : Number.NEGATIVE_INFINITY;
-    const endMs = range.end ? parseLocalDateTime(`${range.end} 23:59:59`).getTime() : Number.POSITIVE_INFINITY;
-    return samples.filter((s) => s.datetime.getTime() >= startMs && s.datetime.getTime() <= endMs);
   }
 
   // -------------------------------------------------------------------------
@@ -287,7 +337,7 @@ export class EnergyService {
       };
     }
 
-    const onlineCount = this.countOnline(data.samples);
+    const onlineCount = this.getLatestSamples().filter((s) => s.online_status_desc === '在线').length;
     const alarmCount = data.alarms.filter((a) => a.alarm_status === '告警中').length;
     const meterCount = data.project.meter_count || DEFAULT_METER_COUNT;
 
@@ -309,14 +359,6 @@ export class EnergyService {
       onlineCount,
       alarmCount,
     };
-  }
-
-  private countOnline(samples: PowerSampleRow[]): number {
-    const latestByMeter = new Map<string, PowerSampleRow>();
-    for (const s of samples) latestByMeter.set(s.meter_no, s); // samples 已按表+时间排序
-    let online = 0;
-    for (const s of latestByMeter.values()) if (s.online_status_desc === '在线') online++;
-    return online;
   }
 
   // -------------------------------------------------------------------------
@@ -365,11 +407,14 @@ export class EnergyService {
   getLoadCurve(start: string | undefined, end: string | undefined, mode: LoadCurveMode, meterNos: string[], category?: string) {
     const data = this.getDashboardData();
     const range = this.resolveRange(start, end);
-    const sView = this.filterSamplesByRange(data.samples, range);
+    const sView = this.getRangeSamples(range);
 
-    // 关键指标（current 使用全量 samples，区间峰值使用 sView）
-    const latestTime = data.samples.length ? data.samples.reduce((m, s) => (s.sample_time > m ? s.sample_time : m), '') : '';
-    const latestSlice = data.samples.filter((s) => s.sample_time === latestTime);
+    // 关键指标（current 使用全量最新采样，区间峰值使用 sView）
+    const latestSamples = this.getLatestSamples();
+    const latestTime = latestSamples.length
+      ? latestSamples.reduce((m, s) => (s.sample_time > m ? s.sample_time : m), '')
+      : '';
+    const latestSlice = latestSamples.filter((s) => s.sample_time === latestTime);
     const currentTotalKw = latestSlice.reduce((s, r) => s + r.power_kw, 0);
 
     const timeGrouped = new Map<string, number>();
@@ -452,7 +497,7 @@ export class EnergyService {
     const data = this.getDashboardData();
     // 每表最新工况（对应 app.py 的 latest_meters）
     const latestByMeter = new Map<string, PowerSampleRow>();
-    for (const s of data.samples) latestByMeter.set(s.meter_no, s);
+    for (const s of this.getLatestSamples()) latestByMeter.set(s.meter_no, s);
 
     let rows = data.meters.map((m) => {
       const sample = latestByMeter.get(m.meter_no);
