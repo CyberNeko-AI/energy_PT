@@ -1,0 +1,179 @@
+import { useState } from 'react';
+import { Button, Col, DatePicker, Layout, Menu, Row } from 'antd';
+import { useQueryClient } from '@tanstack/react-query';
+import dayjs, { type Dayjs } from 'dayjs';
+import { useKpi, useOverview } from '../api/queries';
+import { KpiCard } from '../components/KpiCard';
+import { OverviewTab } from './tabs/OverviewTab';
+import { LoadCurveTab } from './tabs/LoadCurveTab';
+import { MeterTab } from './tabs/MeterTab';
+import { AlarmTab } from './tabs/AlarmTab';
+import { SyncTab } from './tabs/SyncTab';
+
+const { Sider, Content } = Layout;
+const { RangePicker } = DatePicker;
+
+const TAB_ITEMS = [
+  { key: 'overview', label: '📊 能源总览与趋势' },
+  { key: 'load', label: '📈 实时负荷与单表曲线' },
+  { key: 'meters', label: '⚡ 表计台账与工况全览' },
+  { key: 'alarms', label: '🚨 突发告警监测中心' },
+  { key: 'sync', label: '⚙️ 系统通道与同步管理' },
+];
+
+function fmt(n: number, digits = 1): string {
+  return n.toLocaleString('zh-CN', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+
+export default function Dashboard() {
+  const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>([dayjs().subtract(6, 'day'), dayjs()]);
+  const [activeTab, setActiveTab] = useState('overview');
+
+  const start = range?.[0]?.format('YYYY-MM-DD');
+  const end = range?.[1]?.format('YYYY-MM-DD');
+
+  const kpi = useKpi(start, end);
+  const overview = useOverview();
+  const queryClient = useQueryClient();
+
+  const k = kpi.data;
+  const o = overview.data;
+
+  const trendNode =
+    k && k.trend.diff !== null && k.trend.diff !== 0 ? (
+      <>
+        {k.trend.direction === 'down' ? (
+          <span className="trend-tag-down">环比 {k.trend.pct?.toFixed(1)}% ↓</span>
+        ) : (
+          <span className="trend-tag-up">环比 +{k.trend.pct?.toFixed(1)}% ↑</span>
+        )}
+        {k.trend.direction === 'down'
+          ? `较昨日省 ${Math.abs(k.trend.diff!).toFixed(1)} 度`
+          : `较昨日增 ${k.trend.diff!.toFixed(1)} 度`}
+      </>
+    ) : (
+      '暂无昨日基准可比'
+    );
+
+  const alarmActive = (k?.alarmCount ?? 0) > 0;
+
+  const renderTab = () => {
+    switch (activeTab) {
+      case 'load':
+        return <LoadCurveTab start={start} end={end} />;
+      case 'meters':
+        return <MeterTab />;
+      case 'alarms':
+        return <AlarmTab />;
+      case 'sync':
+        return <SyncTab start={start} end={end} />;
+      case 'overview':
+      default:
+        return <OverviewTab start={start} end={end} />;
+    }
+  };
+
+  return (
+    <Layout style={{ minHeight: '100vh' }}>
+      <Sider width={288} className="energy-sider" breakpoint="lg" collapsedWidth={0}>
+        <div className="sider-title">🌿 绿城能源平台</div>
+        <div className="sider-caption">园区能碳智控运营中心 · 宁波慈溪凤起潮鸣</div>
+
+        <div className="sider-block">
+          <h4>📅 数据显示范围</h4>
+          <RangePicker
+            value={range}
+            onChange={(val) => setRange(val)}
+            format="YYYY-MM-DD"
+            size="small"
+            allowClear
+            style={{ width: '100%' }}
+            presets={[
+              { label: '近 7 天', value: [dayjs().subtract(6, 'day'), dayjs()] },
+              { label: '近 14 天', value: [dayjs().subtract(13, 'day'), dayjs()] },
+              { label: '近 30 天', value: [dayjs().subtract(29, 'day'), dayjs()] },
+            ]}
+          />
+        </div>
+
+        <div className="sider-block">
+          <h4>🧭 功能导航</h4>
+          <Menu
+            mode="inline"
+            selectedKeys={[activeTab]}
+            onClick={({ key }) => setActiveTab(key)}
+            items={TAB_ITEMS}
+            style={{ background: 'transparent', border: 'none' }}
+          />
+        </div>
+
+        <div className="sider-block">
+          <h4>📡 数据通道状态</h4>
+          <div className="sider-row"><span>存储媒介</span><span>本地 SQLite</span></div>
+          <div className="sider-row"><span>表计总数</span><span>24 块智能物联电表</span></div>
+          <div className="sider-row"><span>通信方式</span><span>电信 NB-IoT</span></div>
+          <div className="sider-row"><span>负荷采样</span><span>每 15 分钟级推算</span></div>
+        </div>
+
+        <Button
+          block
+          onClick={() => queryClient.invalidateQueries()}
+          style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', color: '#ebf7f0' }}
+        >
+          🔄 立即刷新数据
+        </Button>
+        <div style={{ fontSize: 11.5, color: '#9fc4b1', marginTop: 12, lineHeight: 1.6 }}>
+          提示：页面每 10 秒自动轮询 SQLite 数据库。当后台同步写入新数据时，页面将无感实时更新。
+        </div>
+      </Sider>
+
+      <Content style={{ padding: '22px 26px 40px' }}>
+        {/* 顶部标题与状态栏 */}
+        <Row align="middle" justify="space-between">
+          <Col>
+            <div className="dash-title">🌿 绿城园区能源数据监控中心</div>
+            <div className="dash-subtitle">
+              项目：<b>{o?.project?.project_name ?? '宁波慈溪凤起潮鸣'}</b> · 智能物联网实时感知台账 (ID:{' '}
+              {o?.project?.project_id ?? '202607020000000001'})
+            </div>
+          </Col>
+          <Col>
+            <div className="status-badge">
+              <span className="pulse-dot" />
+              <span>SQLite 实时在线</span>
+              <span style={{ color: '#7da190', fontWeight: 400 }}>|</span>
+              <span>{o?.dbMtime?.split(' ')[1] ?? '—'} 步进更新</span>
+            </div>
+          </Col>
+        </Row>
+
+        {/* KPI 卡片阵列 */}
+        <Row gutter={14} style={{ marginTop: 16 }}>
+          <Col flex="1">
+            <KpiCard title="周期总用电量" value={`${fmt(k?.totalUsage ?? 0)} kWh`} detail={`统计跨度 ${k?.statDays ?? 0} 个自然日`} accent="#0d8250" />
+          </Col>
+          <Col flex="1">
+            <KpiCard title="最新日用电量" value={`${fmt(k?.latestDaily ?? 0)} kWh`} detail={trendNode} accent="#15803d" />
+          </Col>
+          <Col flex="1">
+            <KpiCard title="估算总电费成本" value={`¥ ${fmt(k?.totalCost ?? 0)}`} detail={`参考单价 ${(k?.electricityPrice ?? 0.82).toFixed(2)} 元/度`} accent="#d97706" />
+          </Col>
+          <Col flex="1">
+            <KpiCard title="等效碳排放基准" value={`${fmt(k?.totalEmission ?? 0, 2)} 吨`} detail="折算 0.581 kg CO₂/kWh" accent="#0284c7" />
+          </Col>
+          <Col flex="1">
+            <KpiCard
+              title="表计工况与告警"
+              value={`${k?.meterCount ?? 24} 块全部在运`}
+              detail={alarmActive ? `${k?.alarmCount} 起待处理` : `${k?.onlineCount ?? 24}/${k?.meterCount ?? 24} 块在线 · 运行平稳`}
+              accent={alarmActive ? '#e11d48' : '#059669'}
+            />
+          </Col>
+        </Row>
+
+        {/* 当前选项卡内容 */}
+        <div style={{ marginTop: 16 }}>{renderTab()}</div>
+      </Content>
+    </Layout>
+  );
+}

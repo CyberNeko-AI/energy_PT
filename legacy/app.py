@@ -820,7 +820,7 @@ def render_live_dashboard(db_path: Path):
     with c5:
         alarm_color = "#e11d48" if alarm_count > 0 else "#059669"
         alarm_text = f"{alarm_count} 起待处理" if alarm_count > 0 else f"{online_count}/{meter_count} 块在线 · 运行平稳"
-        st.markdown(build_kpi_card("表计工况与告警", f"{meter_count} 块全部在运", alarm_text, alarm_color), unsafe_allow_html=True)
+        st.markdown(build_kpi_card("表计工况与告警", f"{meter_count} 块全部在线", alarm_text, alarm_color), unsafe_allow_html=True)
 
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
@@ -1302,7 +1302,7 @@ python3 sync_energy_to_sqlite.py --daemon
 
 with st.sidebar:
     st.markdown("## 🌿 绿城能源平台")
-    st.caption("园区能碳智控运营中心 · 宁波慈溪凤起潮鸣")
+    st.caption("园区能碳智控运营中心")
     st.divider()
 
     st.markdown("### 📡 数据通道状态")
