@@ -344,44 +344,69 @@ export class SyncService {
       for (let t = start.getTime(); t <= end.getTime(); t += 900_000) {
         points.push(this.dateTimeStr(new Date(t)));
       }
-
-      const rows = await this.fetchSlicesConcurrent(sid, projectId, points);
-      const nowStrVal = nowStr();
-      for (const { dtStr, datas } of rows) {
-        for (const item of datas ?? []) {
-          const meterNo = String(item.meter_no ?? '').trim();
-          if (!meterNo) continue;
-          const rawTotal = item.zxygzdl;
-          if (rawTotal === null || rawTotal === undefined || ['', 'None'].includes(String(rawTotal).trim())) continue;
-          const totalKwh = toNum(rawTotal);
-          if (totalKwh <= 0) continue;
-          const cons = item.mbr_cons_info ?? {};
-          const rateVal = toNum(cons.rate, 1) || 1;
-          const realKwh = Math.round(totalKwh * rateVal * 100) / 100;
-
-          this.db.run(
-            `INSERT INTO meter_load_samples (meter_no, project_id, sample_time, total_kwh, rate1_kwh, rate2_kwh, rate3_kwh, rate4_kwh, multiplier, real_kwh, relay_status, online_status, created_at)
-             VALUES (:meter_no, :project_id, :sample_time, :total_kwh, :rate1_kwh, :rate2_kwh, :rate3_kwh, :rate4_kwh, :multiplier, :real_kwh, :relay_status, :online_status, :created_at)
-             ON CONFLICT(meter_no, sample_time) DO UPDATE SET
-               total_kwh = excluded.total_kwh,
-               rate1_kwh = excluded.rate1_kwh,
-               rate2_kwh = excluded.rate2_kwh,
-               rate3_kwh = excluded.rate3_kwh,
-               rate4_kwh = excluded.rate4_kwh,
-               multiplier = excluded.multiplier,
-               real_kwh = excluded.real_kwh,
-               relay_status = excluded.relay_status,
-               online_status = excluded.online_status,
-               created_at = excluded.created_at`,
-            { meter_no: meterNo, project_id: projectId, sample_time: dtStr, total_kwh: totalKwh, rate1_kwh: toNum(item.zxygzdl1), rate2_kwh: toNum(item.zxygzdl2), rate3_kwh: toNum(item.zxygzdl3), rate4_kwh: toNum(item.zxygzdl4), multiplier: rateVal, real_kwh: realKwh, relay_status: '合闸', online_status: '在线', created_at: nowStrVal },
-          );
-          totalSaved++;
-        }
-      }
+      totalSaved += await this.fetchAndStoreSamples(sid, projectId, points);
       this.logger.log('[历史回填] 日期 %s 成功写入负荷样本。', dateStr);
     }
     this.logger.log('[历史回填] 全部完成！共 %d 条。', totalSaved);
     return { saved: totalSaved, sid };
+  }
+
+  /**
+   * 回填最近若干分钟内的 15 分钟采样（按 15 分钟网格对齐）。
+   * 用于定期补齐 getReadingDataInfo 数据延迟窗口内的缺口，保证负荷曲线连续、无缺步。
+   */
+  async backfillRecentWindow(sid = '', minutes = 180): Promise<{ saved: number; sid: string }> {
+    sid = sid || this.auth.getSid();
+    const projectId = this.projectId();
+    const nowMs = Date.now();
+    const startMs = Math.ceil((nowMs - minutes * 60_000) / 900_000) * 900_000;
+    const points: string[] = [];
+    for (let t = startMs; t <= nowMs; t += 900_000) {
+      points.push(this.dateTimeStr(new Date(t)));
+    }
+    const saved = await this.fetchAndStoreSamples(sid, projectId, points);
+    this.logger.log('[近期回填] 最近 %d 分钟内补齐 %d 条负荷样本。', minutes, saved);
+    return { saved, sid };
+  }
+
+  /** 抓取给定 15 分钟时间点的读数并写入 meter_load_samples。 */
+  private async fetchAndStoreSamples(sid: string, projectId: string, points: string[]): Promise<number> {
+    if (points.length === 0) return 0;
+    const rows = await this.fetchSlicesConcurrent(sid, projectId, points);
+    const nowStrVal = nowStr();
+    let saved = 0;
+    for (const { dtStr, datas } of rows) {
+      for (const item of datas ?? []) {
+        const meterNo = String(item.meter_no ?? '').trim();
+        if (!meterNo) continue;
+        const rawTotal = item.zxygzdl;
+        if (rawTotal === null || rawTotal === undefined || ['', 'None'].includes(String(rawTotal).trim())) continue;
+        const totalKwh = toNum(rawTotal);
+        if (totalKwh <= 0) continue;
+        const cons = item.mbr_cons_info ?? {};
+        const rateVal = toNum(cons.rate, 1) || 1;
+        const realKwh = Math.round(totalKwh * rateVal * 100) / 100;
+
+        this.db.run(
+          `INSERT INTO meter_load_samples (meter_no, project_id, sample_time, total_kwh, rate1_kwh, rate2_kwh, rate3_kwh, rate4_kwh, multiplier, real_kwh, relay_status, online_status, created_at)
+           VALUES (:meter_no, :project_id, :sample_time, :total_kwh, :rate1_kwh, :rate2_kwh, :rate3_kwh, :rate4_kwh, :multiplier, :real_kwh, :relay_status, :online_status, :created_at)
+           ON CONFLICT(meter_no, sample_time) DO UPDATE SET
+             total_kwh = excluded.total_kwh,
+             rate1_kwh = excluded.rate1_kwh,
+             rate2_kwh = excluded.rate2_kwh,
+             rate3_kwh = excluded.rate3_kwh,
+             rate4_kwh = excluded.rate4_kwh,
+             multiplier = excluded.multiplier,
+             real_kwh = excluded.real_kwh,
+             relay_status = excluded.relay_status,
+             online_status = excluded.online_status,
+             created_at = excluded.created_at`,
+          { meter_no: meterNo, project_id: projectId, sample_time: dtStr, total_kwh: totalKwh, rate1_kwh: toNum(item.zxygzdl1), rate2_kwh: toNum(item.zxygzdl2), rate3_kwh: toNum(item.zxygzdl3), rate4_kwh: toNum(item.zxygzdl4), multiplier: rateVal, real_kwh: realKwh, relay_status: '合闸', online_status: '在线', created_at: nowStrVal },
+        );
+        saved++;
+      }
+    }
+    return saved;
   }
 
   private async fetchSlicesConcurrent(sid: string, projectId: string, points: string[]) {
