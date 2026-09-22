@@ -466,6 +466,10 @@ export class SyncService {
       counts.daily = r.saved;
     }
     if (mode === 'sample' || mode === 'all') {
+      // 先补齐近期 15 分钟网格缺口，再采集实时工况（对齐调度器 handleSample）
+      const b = await this.backfillRecentWindow(sid);
+      sid = b.sid;
+      counts.backfillRecent = b.saved;
       const r = await this.syncSample(sid);
       sid = r.sid;
       counts.sample = r.saved;
