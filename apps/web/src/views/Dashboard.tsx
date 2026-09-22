@@ -178,7 +178,7 @@ export default function Dashboard() {
             <KpiCard title="最新日用电量" value={`${fmt(k?.latestDaily ?? 0)} kWh`} detail={trendNode} accent="#15803d" />
           </Col>
           <Col flex="1">
-            <KpiCard title="估算总电费成本" value={`¥ ${fmt(k?.totalCost ?? 0)}`} detail={`参考单价 ${(k?.electricityPrice ?? 0.82).toFixed(2)} 元/度`} accent="#d97706" />
+            <KpiCard title="估算总电费成本" value={`¥ ${fmt(k?.totalCost ?? 0)}`} detail={`参考单价 ${(k?.electricityPrice ?? 0.558).toFixed(2)} 元/度`} accent="#d97706" />
           </Col>
           <Col flex="1">
             <KpiCard title="等效碳排放基准" value={`${fmt(k?.totalEmission ?? 0, 2)} 吨`} detail="折算 0.581 kg CO₂/kWh" accent="#0284c7" />

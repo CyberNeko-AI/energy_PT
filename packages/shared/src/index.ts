@@ -7,7 +7,7 @@
 export const EMISSION_FACTOR_TON_PER_KWH = 0.000581;
 
 /** 浙江省一般工商业综合参考电价 (元 / kWh) */
-export const DEFAULT_ELECTRICITY_PRICE = 0.82;
+export const DEFAULT_ELECTRICITY_PRICE = 0.558;
 
 /** 目标项目编号 */
 export const DEFAULT_PROJECT_ID = '202607020000000001';
